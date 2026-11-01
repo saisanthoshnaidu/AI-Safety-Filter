@@ -7,52 +7,114 @@ import httpx
 from pinecone import Pinecone, ServerlessSpec
 import json
 
+# Safety filter
+from backend.safety_filter import check_prompt
+
+
+# ============================================================
+# ENVIRONMENT VARIABLES
+# ============================================================
+
 load_dotenv()
 
-# 🔑 FORCE LOAD ENV VARIABLES (Windows-safe)
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "jarvis-knowledge")
+PINECONE_INDEX_NAME = os.getenv(
+    "PINECONE_INDEX_NAME",
+    "jarvis-knowledge"
+)
 
 if not PINECONE_API_KEY:
     raise RuntimeError(
         "❌ PINECONE_API_KEY not found.\n"
-        "Make sure your .env file is in project root and contains:\n"
+        "Make sure your .env file is in the project root and contains:\n"
         "PINECONE_API_KEY=your_key_here"
     )
 
-app = FastAPI(title="Jarvis AI Assistant")
+
+# ============================================================
+# FASTAPI APP
+# ============================================================
+
+app = FastAPI(
+    title="Jarvis AI Assistant"
+)
+
+
+# ============================================================
+# CORS
+# ============================================================
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-pc = Pinecone(api_key=PINECONE_API_KEY)
+
+# ============================================================
+# PINECONE
+# ============================================================
+
+pc = Pinecone(
+    api_key=PINECONE_API_KEY
+)
+
 index_name = PINECONE_INDEX_NAME
 
 index = None
 
+
+# ============================================================
+# REQUEST MODELS
+# ============================================================
+
 class QueryRequest(BaseModel):
     query: str
+
 
 class DocumentRequest(BaseModel):
     text: str
 
+
+# ============================================================
+# OLLAMA EMBEDDINGS
+# ============================================================
+
 async def get_ollama_embedding(text: str):
-    """Get embeddings from Ollama"""
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    """Get embeddings from Ollama."""
+
+    async with httpx.AsyncClient(
+        timeout=30.0
+    ) as client:
+
         response = await client.post(
             "http://localhost:11434/api/embeddings",
-            json={"model": "llama2", "prompt": text}
+            json={
+                "model": "llama2",
+                "prompt": text
+            }
         )
+
+        response.raise_for_status()
+
         return response.json()["embedding"]
 
+
+# ============================================================
+# OLLAMA RESPONSE
+# ============================================================
+
 async def get_ollama_response(prompt: str):
-    """Get response from Ollama"""
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    """Get response from Ollama."""
+
+    async with httpx.AsyncClient(
+        timeout=60.0
+    ) as client:
+
         response = await client.post(
             "http://localhost:11434/api/generate",
             json={
@@ -61,96 +123,299 @@ async def get_ollama_response(prompt: str):
                 "stream": False
             }
         )
+
+        response.raise_for_status()
+
         return response.json()["response"]
+
+
+# ============================================================
+# STARTUP
+# ============================================================
 
 @app.on_event("startup")
 async def startup_event():
+
     global index
-    
-    # create index if doesn't exist
-    existing_indexes = [idx.name for idx in pc.list_indexes()]
-    
+
+    print("Starting Jarvis AI Assistant...")
+
+    # --------------------------------------------------------
+    # Check safety filter
+    # --------------------------------------------------------
+
+    print("Safety filter loaded successfully")
+
+    # --------------------------------------------------------
+    # Check Pinecone
+    # --------------------------------------------------------
+
+    existing_indexes = [
+        idx.name
+        for idx in pc.list_indexes()
+    ]
+
     if index_name not in existing_indexes:
+
+        print(
+            f"Creating Pinecone index: {index_name}"
+        )
+
         pc.create_index(
             name=index_name,
             dimension=4096,
             metric="cosine",
-            spec=ServerlessSpec(cloud="aws", region="us-east-1")
+            spec=ServerlessSpec(
+                cloud="aws",
+                region="us-east-1"
+            )
         )
-    
+
     index = pc.Index(index_name)
+
+    print(
+        f"Pinecone index '{index_name}' loaded successfully"
+    )
+
+
+# ============================================================
+# ROOT
+# ============================================================
 
 @app.get("/")
 async def root():
-    return {"message": "Jarvis AI Assistant", "status": "online"}
+
+    return {
+        "message": "Jarvis AI Assistant",
+        "status": "online"
+    }
+
+
+# ============================================================
+# CHAT
+# ============================================================
 
 @app.post("/api/chat")
 async def chat(request: QueryRequest):
+
     try:
-        query_embedding = await get_ollama_embedding(request.query)
-        
-        # search similar vectors
+
+        # ----------------------------------------------------
+        # SAFETY FILTER
+        # ----------------------------------------------------
+
+        safety_result = check_prompt(
+            request.query
+        )
+
+        print(
+            f"Safety check: {request.query} -> "
+            f"{safety_result}"
+        )
+
+        # ----------------------------------------------------
+        # BLOCK UNSAFE PROMPTS
+        # ----------------------------------------------------
+
+        if not safety_result["is_safe"]:
+
+            return {
+                "response": (
+                    "I can't help with that request."
+                ),
+                "sources": 0,
+                "safety": safety_result
+            }
+
+        # ----------------------------------------------------
+        # GET EMBEDDING
+        # ----------------------------------------------------
+
+        query_embedding = await get_ollama_embedding(
+            request.query
+        )
+
+        # ----------------------------------------------------
+        # SEARCH PINECONE
+        # ----------------------------------------------------
+
         results = index.query(
             vector=query_embedding,
             top_k=3,
             include_metadata=True
         )
-        
-        # build context from results
+
+        # ----------------------------------------------------
+        # BUILD CONTEXT
+        # ----------------------------------------------------
+
         context = ""
+
         if results.matches:
-            context = "\n".join([match.metadata.get("text", "") for match in results.matches])
-        
-        # create prompt with context
-        prompt = f"""Use the following context to answer the question. If the context doesn't contain relevant information, answer based on your general knowledge.
 
-Context: {context}
+            context = "\n".join(
+                [
+                    match.metadata.get(
+                        "text",
+                        ""
+                    )
+                    for match in results.matches
+                ]
+            )
 
-Question: {request.query}
+        # ----------------------------------------------------
+        # BUILD PROMPT
+        # ----------------------------------------------------
 
-Answer:"""
-        
-        response = await get_ollama_response(prompt)
-        
+        prompt = f"""
+Use the following context to answer the question.
+
+If the context doesn't contain relevant information,
+answer based on your general knowledge.
+
+Context:
+{context}
+
+Question:
+{request.query}
+
+Answer:
+"""
+
+        # ----------------------------------------------------
+        # GET OLLAMA RESPONSE
+        # ----------------------------------------------------
+
+        response = await get_ollama_response(
+            prompt
+        )
+
+        # ----------------------------------------------------
+        # RETURN RESPONSE
+        # ----------------------------------------------------
+
         return {
             "response": response,
-            "sources": len(results.matches) if results.matches else 0
+            "sources": (
+                len(results.matches)
+                if results.matches
+                else 0
+            ),
+            "safety": safety_result
         }
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+
+        print(
+            f"Chat error: {str(e)}"
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+
+# ============================================================
+# ADD KNOWLEDGE
+# ============================================================
 
 @app.post("/api/add-knowledge")
-async def add_knowledge(request: DocumentRequest):
+async def add_knowledge(
+    request: DocumentRequest
+):
+
     try:
-        # split text into chunks
-        chunks = [request.text[i:i+500] for i in range(0, len(request.text), 450)]
-        
+
+        # ----------------------------------------------------
+        # SPLIT TEXT INTO CHUNKS
+        # ----------------------------------------------------
+
+        chunks = [
+            request.text[i:i + 500]
+            for i in range(
+                0,
+                len(request.text),
+                450
+            )
+        ]
+
         vectors = []
+
+        # ----------------------------------------------------
+        # CREATE EMBEDDINGS
+        # ----------------------------------------------------
+
         for i, chunk in enumerate(chunks):
-            embedding = await get_ollama_embedding(chunk)
-            vectors.append({
-                "id": f"doc_{hash(chunk)}_{i}",
-                "values": embedding,
-                "metadata": {"text": chunk}
-            })
-        
-        index.upsert(vectors=vectors)
-        
+
+            embedding = await get_ollama_embedding(
+                chunk
+            )
+
+            vectors.append(
+                {
+                    "id": (
+                        f"doc_{hash(chunk)}_{i}"
+                    ),
+                    "values": embedding,
+                    "metadata": {
+                        "text": chunk
+                    }
+                }
+            )
+
+        # ----------------------------------------------------
+        # UPSERT TO PINECONE
+        # ----------------------------------------------------
+
+        index.upsert(
+            vectors=vectors
+        )
+
         return {
-            "message": "Knowledge added successfully",
+            "message": (
+                "Knowledge added successfully"
+            ),
             "chunks_added": len(chunks)
         }
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+
+        print(
+            f"Knowledge error: {str(e)}"
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+
+# ============================================================
+# HEALTH CHECK
+# ============================================================
 
 @app.get("/api/health")
 async def health_check():
+
     return {
         "status": "healthy",
         "llm": "ollama-llama2",
-        "vector_db": "pinecone"
+        "vector_db": "pinecone",
+        "safety_filter": "enabled"
     }
 
+
+# ============================================================
+# RUN DIRECTLY
+# ============================================================
+
 if __name__ == "__main__":
+
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000
+    )

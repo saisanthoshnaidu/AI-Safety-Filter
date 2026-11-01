@@ -1,29 +1,45 @@
 # ==============================
+
 # Python
+
 # ==============================
-__pycache__/
+
+**pycache**/
 *.py[cod]
 *$py.class
 *.so
 .Python
+
+# Virtual environments
+
+.venv/
+**/.venv/
 env/
 venv/
 ENV/
 backend/venv/
+
+# Python packages
+
 *.egg-info/
-dist/
-build/
 
 # ==============================
+
 # Environment variables
-# ==============================
-.env
-.env.local
-*.env
 
 # ==============================
-# ML / Training Artifacts
+
+.env
+.env.*
+*.env
+!.env.example
+
 # ==============================
+
+# ML / Training Artifacts
+
+# ==============================
+
 results/
 *.pt
 *.pth
@@ -31,9 +47,16 @@ results/
 *.safetensors
 *.pkl
 
+# Keep trained joblib models
+
+!*.joblib
+
 # ==============================
+
 # IDE
+
 # ==============================
+
 .vscode/
 .idea/
 *.swp
@@ -41,51 +64,75 @@ results/
 *~
 
 # ==============================
+
 # Node
+
 # ==============================
+
 node_modules/
-frontend/node_modules/
+**/node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
 # ==============================
-# React build
+
+# React Build
+
 # ==============================
+
 frontend/build/
 frontend/dist/
 
 # ==============================
+
 # OS
+
 # ==============================
+
 .DS_Store
 Thumbs.db
 
 # ==============================
+
 # Logs
+
 # ==============================
+
 *.log
 logs/
 
 # ==============================
+
 # Database
+
 # ==============================
+
 *.db
 *.sqlite
 
 # ==============================
+
 # Pinecone
+
 # ==============================
+
 pinecone_data/
 
 # ==============================
-# Test coverage
+
+# Test Coverage
+
 # ==============================
+
 .coverage
 htmlcov/
 
 # ==============================
+
 # Jupyter
+
 # ==============================
+
 .ipynb_checkpoints/
